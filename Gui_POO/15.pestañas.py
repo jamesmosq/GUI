@@ -4,7 +4,7 @@ from tkinter import ttk
 # Crear la ventana principal
 root = tk.Tk()
 root.geometry('400x300')
-root.title("Ejemplo de pestañas")
+root.title("Pestañas")
 
 # Crear el widget Notebook (pestañas)
 notebook = ttk.Notebook(root)
