@@ -1,0 +1,953 @@
+import tkinter as tk
+from tkinter import ttk
+from tkinter import messagebox
+import mysql.connector
+from datetime import datetime
+import re
+
+
+# =================== CONFIGURACIÓN DE BASE DE DATOS ===================
+class DatabaseConnection:
+    def __init__(self):
+        self.connection = None
+        self.cursor = None
+
+    def connect(self):
+        try:
+            self.connection = mysql.connector.connect(
+                host='localhost',
+                database='Northwindx',
+                user='root',
+                password='base1234',
+                autocommit=False
+            )
+            self.cursor = self.connection.cursor(buffered=True)
+            return True
+        except mysql.connector.Error as err:
+            messagebox.showerror("Error de Conexión", f"Error conectando a la base de datos: {err}")
+            return False
+
+    def disconnect(self):
+        if self.cursor:
+            self.cursor.close()
+        if self.connection:
+            self.connection.close()
+
+    def call_procedure(self, procedure_name, parameters=None):
+        try:
+            if parameters:
+                self.cursor.callproc(procedure_name, parameters)
+            else:
+                self.cursor.callproc(procedure_name)
+
+            # Obtener resultados
+            results = []
+            for result in self.cursor.stored_results():
+                results.extend(result.fetchall())
+
+            return True, results
+        except mysql.connector.Error as err:
+            self.connection.rollback()
+            return False, str(err)
+
+
+# Instancia global de conexión
+db = DatabaseConnection()
+
+
+# =================== FUNCIONES DE VALIDACIÓN ===================
+def validate_numeric(value, field_name):
+    if not value.strip():
+        return True, None  # Campo vacío permitido para algunos casos
+    try:
+        return True, float(value) if '.' in value else int(value)
+    except ValueError:
+        messagebox.showerror("Error de Validación", f"{field_name} debe ser un número válido")
+        return False, None
+
+
+def validate_required(value, field_name):
+    if not value.strip():
+        messagebox.showerror("Error de Validación", f"{field_name} es requerido")
+        return False
+    return True
+
+
+def validate_date(date_string):
+    if not date_string.strip():
+        return True, None
+    try:
+        # Aceptar formato YYYY-MM-DD
+        date_obj = datetime.strptime(date_string, "%Y-%m-%d")
+        return True, date_obj
+    except ValueError:
+        messagebox.showerror("Error de Validación", "Fecha debe estar en formato YYYY-MM-DD")
+        return False, None
+
+
+# =================== FUNCIONES PARA PRODUCTS ===================
+def save_product():
+    if not db.connection:
+        if not db.connect():
+            return
+
+    # Validaciones
+    if not validate_required(ProductName.get(), "Nombre del Producto"):
+        return
+
+    # Validar SupplierID y CategoryID si no están vacíos
+    supplier_valid, supplier_id = validate_numeric(SupplierID.get(), "ID Proveedor") if SupplierID.get().strip() else (
+    True, None)
+    if not supplier_valid:
+        return
+
+    category_valid, category_id = validate_numeric(CategoryID.get(), "ID Categoría") if CategoryID.get().strip() else (
+    True, None)
+    if not category_valid:
+        return
+
+    price_valid, price_value = validate_numeric(Price.get(), "Precio") if Price.get().strip() else (True, None)
+    if not price_valid:
+        return
+
+    # Llamar procedimiento almacenado
+    parameters = (
+        ProductName.get(),
+        supplier_id,
+        category_id,
+        Unit.get() if Unit.get().strip() else None,
+        price_value
+    )
+
+    success, result = db.call_procedure('sp_InsertProduct', parameters)
+
+    if success:
+        messagebox.showinfo("Éxito", "Producto guardado correctamente")
+        clear_product_form()
+        load_products_list()
+    else:
+        messagebox.showerror("Error", f"Error al guardar producto: {result}")
+
+
+def update_product():
+    if not db.connection:
+        if not db.connect():
+            return
+
+    # Validar que se haya seleccionado un producto
+    product_id_valid, product_id = validate_numeric(ProductID.get(), "ID Producto")
+    if not product_id_valid or not product_id:
+        messagebox.showerror("Error", "Debe ingresar un ID de producto válido")
+        return
+
+    # Validaciones similares a save_product
+    if not validate_required(ProductName.get(), "Nombre del Producto"):
+        return
+
+    supplier_valid, supplier_id = validate_numeric(SupplierID.get(), "ID Proveedor") if SupplierID.get().strip() else (
+    True, None)
+    if not supplier_valid:
+        return
+
+    category_valid, category_id = validate_numeric(CategoryID.get(), "ID Categoría") if CategoryID.get().strip() else (
+    True, None)
+    if not category_valid:
+        return
+
+    price_valid, price_value = validate_numeric(Price.get(), "Precio") if Price.get().strip() else (True, None)
+    if not price_valid:
+        return
+
+    parameters = (
+        product_id,
+        ProductName.get(),
+        supplier_id,
+        category_id,
+        Unit.get() if Unit.get().strip() else None,
+        price_value
+    )
+
+    success, result = db.call_procedure('sp_UpdateProduct', parameters)
+
+    if success:
+        messagebox.showinfo("Éxito", "Producto actualizado correctamente")
+        load_products_list()
+    else:
+        messagebox.showerror("Error", f"Error al actualizar producto: {result}")
+
+
+def delete_product():
+    if not db.connection:
+        if not db.connect():
+            return
+
+    product_id_valid, product_id = validate_numeric(ProductID.get(), "ID Producto")
+    if not product_id_valid or not product_id:
+        messagebox.showerror("Error", "Debe ingresar un ID de producto válido")
+        return
+
+    if messagebox.askyesno("Confirmar", "¿Está seguro de eliminar este producto?"):
+        success, result = db.call_procedure('sp_DeleteProduct', (product_id,))
+
+        if success:
+            messagebox.showinfo("Éxito", "Producto eliminado correctamente")
+            clear_product_form()
+            load_products_list()
+        else:
+            messagebox.showerror("Error", f"Error al eliminar producto: {result}")
+
+
+def search_product():
+    if not db.connection:
+        if not db.connect():
+            return
+
+    product_id_valid, product_id = validate_numeric(ProductID.get(), "ID Producto")
+    if not product_id_valid or not product_id:
+        messagebox.showerror("Error", "Debe ingresar un ID de producto válido")
+        return
+
+    success, result = db.call_procedure('sp_GetProduct', (product_id,))
+
+    if success and result:
+        product = result[0]
+        ProductName.delete(0, tk.END)
+        ProductName.insert(0, product[1] if product[1] else "")
+        SupplierID.delete(0, tk.END)
+        SupplierID.insert(0, product[2] if product[2] else "")
+        CategoryID.delete(0, tk.END)
+        CategoryID.insert(0, product[3] if product[3] else "")
+        Unit.delete(0, tk.END)
+        Unit.insert(0, product[4] if product[4] else "")
+        Price.delete(0, tk.END)
+        Price.insert(0, product[5] if product[5] else "")
+    else:
+        messagebox.showinfo("No encontrado", "Producto no encontrado")
+
+
+def clear_product_form():
+    ProductID.delete(0, tk.END)
+    ProductName.delete(0, tk.END)
+    SupplierID.delete(0, tk.END)
+    CategoryID.delete(0, tk.END)
+    Unit.delete(0, tk.END)
+    Price.delete(0, tk.END)
+
+
+def load_products_list():
+    if not db.connection:
+        if not db.connect():
+            return
+
+    success, results = db.call_procedure('sp_GetAllProducts')
+    if success:
+        # Limpiar lista actual
+        for item in products_tree.get_children():
+            products_tree.delete(item)
+
+        # Agregar productos
+        for product in results:
+            products_tree.insert('', 'end', values=product)
+
+
+# =================== FUNCIONES PARA CUSTOMERS ===================
+def save_customer():
+    if not db.connection:
+        if not db.connect():
+            return
+
+    if not validate_required(CustomerName.get(), "Nombre del Cliente"):
+        return
+
+    parameters = (
+        CustomerName.get(),
+        ContactName.get() if ContactName.get().strip() else None,
+        Address.get() if Address.get().strip() else None,
+        City.get() if City.get().strip() else None,
+        PostalCode.get() if PostalCode.get().strip() else None,
+        Country.get() if Country.get().strip() else None
+    )
+
+    success, result = db.call_procedure('sp_InsertCustomer', parameters)
+
+    if success:
+        messagebox.showinfo("Éxito", "Cliente guardado correctamente")
+        clear_customer_form()
+        load_customers_list()
+    else:
+        messagebox.showerror("Error", f"Error al guardar cliente: {result}")
+
+
+def update_customer():
+    if not db.connection:
+        if not db.connect():
+            return
+
+    customer_id_valid, customer_id = validate_numeric(CustomerID.get(), "ID Cliente")
+    if not customer_id_valid or not customer_id:
+        messagebox.showerror("Error", "Debe ingresar un ID de cliente válido")
+        return
+
+    if not validate_required(CustomerName.get(), "Nombre del Cliente"):
+        return
+
+    parameters = (
+        customer_id,
+        CustomerName.get(),
+        ContactName.get() if ContactName.get().strip() else None,
+        Address.get() if Address.get().strip() else None,
+        City.get() if City.get().strip() else None,
+        PostalCode.get() if PostalCode.get().strip() else None,
+        Country.get() if Country.get().strip() else None
+    )
+
+    success, result = db.call_procedure('sp_UpdateCustomer', parameters)
+
+    if success:
+        messagebox.showinfo("Éxito", "Cliente actualizado correctamente")
+        load_customers_list()
+    else:
+        messagebox.showerror("Error", f"Error al actualizar cliente: {result}")
+
+
+def delete_customer():
+    if not db.connection:
+        if not db.connect():
+            return
+
+    customer_id_valid, customer_id = validate_numeric(CustomerID.get(), "ID Cliente")
+    if not customer_id_valid or not customer_id:
+        messagebox.showerror("Error", "Debe ingresar un ID de cliente válido")
+        return
+
+    if messagebox.askyesno("Confirmar", "¿Está seguro de eliminar este cliente?"):
+        success, result = db.call_procedure('sp_DeleteCustomer', (customer_id,))
+
+        if success:
+            messagebox.showinfo("Éxito", "Cliente eliminado correctamente")
+            clear_customer_form()
+            load_customers_list()
+        else:
+            messagebox.showerror("Error", f"Error al eliminar cliente: {result}")
+
+
+def search_customer():
+    if not db.connection:
+        if not db.connect():
+            return
+
+    customer_id_valid, customer_id = validate_numeric(CustomerID.get(), "ID Cliente")
+    if not customer_id_valid or not customer_id:
+        messagebox.showerror("Error", "Debe ingresar un ID de cliente válido")
+        return
+
+    success, result = db.call_procedure('sp_GetCustomer', (customer_id,))
+
+    if success and result:
+        customer = result[0]
+        CustomerName.delete(0, tk.END)
+        CustomerName.insert(0, customer[1] if customer[1] else "")
+        ContactName.delete(0, tk.END)
+        ContactName.insert(0, customer[2] if customer[2] else "")
+        Address.delete(0, tk.END)
+        Address.insert(0, customer[3] if customer[3] else "")
+        City.delete(0, tk.END)
+        City.insert(0, customer[4] if customer[4] else "")
+        PostalCode.delete(0, tk.END)
+        PostalCode.insert(0, customer[5] if customer[5] else "")
+        Country.delete(0, tk.END)
+        Country.insert(0, customer[6] if customer[6] else "")
+    else:
+        messagebox.showinfo("No encontrado", "Cliente no encontrado")
+
+
+def clear_customer_form():
+    CustomerID.delete(0, tk.END)
+    CustomerName.delete(0, tk.END)
+    ContactName.delete(0, tk.END)
+    Address.delete(0, tk.END)
+    City.delete(0, tk.END)
+    PostalCode.delete(0, tk.END)
+    Country.delete(0, tk.END)
+
+
+def load_customers_list():
+    if not db.connection:
+        if not db.connect():
+            return
+
+    success, results = db.call_procedure('sp_GetAllCustomers')
+    if success:
+        for item in customers_tree.get_children():
+            customers_tree.delete(item)
+
+        for customer in results:
+            customers_tree.insert('', 'end', values=customer)
+
+
+# =================== FUNCIONES PARA EMPLOYEES ===================
+def save_employee():
+    if not db.connection:
+        if not db.connect():
+            return
+
+    if not validate_required(LastName.get(), "Apellido"):
+        return
+
+    if not validate_required(FirstName.get(), "Nombre"):
+        return
+
+    date_valid, birth_date = validate_date(BirthDate.get())
+    if not date_valid:
+        return
+
+    parameters = (
+        LastName.get(),
+        FirstName.get(),
+        birth_date,
+        Photo.get() if Photo.get().strip() else None,
+        Notes.get('1.0', tk.END).strip() if Notes.get('1.0', tk.END).strip() else None
+    )
+
+    success, result = db.call_procedure('sp_InsertEmployee', parameters)
+
+    if success:
+        messagebox.showinfo("Éxito", "Empleado guardado correctamente")
+        clear_employee_form()
+        load_employees_list()
+    else:
+        messagebox.showerror("Error", f"Error al guardar empleado: {result}")
+
+
+def update_employee():
+    if not db.connection:
+        if not db.connect():
+            return
+
+    employee_id_valid, employee_id = validate_numeric(EmployeeID.get(), "ID Empleado")
+    if not employee_id_valid or not employee_id:
+        messagebox.showerror("Error", "Debe ingresar un ID de empleado válido")
+        return
+
+    if not validate_required(LastName.get(), "Apellido"):
+        return
+
+    if not validate_required(FirstName.get(), "Nombre"):
+        return
+
+    date_valid, birth_date = validate_date(BirthDate.get())
+    if not date_valid:
+        return
+
+    parameters = (
+        employee_id,
+        LastName.get(),
+        FirstName.get(),
+        birth_date,
+        Photo.get() if Photo.get().strip() else None,
+        Notes.get('1.0', tk.END).strip() if Notes.get('1.0', tk.END).strip() else None
+    )
+
+    success, result = db.call_procedure('sp_UpdateEmployee', parameters)
+
+    if success:
+        messagebox.showinfo("Éxito", "Empleado actualizado correctamente")
+        load_employees_list()
+    else:
+        messagebox.showerror("Error", f"Error al actualizar empleado: {result}")
+
+
+def delete_employee():
+    if not db.connection:
+        if not db.connect():
+            return
+
+    employee_id_valid, employee_id = validate_numeric(EmployeeID.get(), "ID Empleado")
+    if not employee_id_valid or not employee_id:
+        messagebox.showerror("Error", "Debe ingresar un ID de empleado válido")
+        return
+
+    if messagebox.askyesno("Confirmar", "¿Está seguro de eliminar este empleado?"):
+        success, result = db.call_procedure('sp_DeleteEmployee', (employee_id,))
+
+        if success:
+            messagebox.showinfo("Éxito", "Empleado eliminado correctamente")
+            clear_employee_form()
+            load_employees_list()
+        else:
+            messagebox.showerror("Error", f"Error al eliminar empleado: {result}")
+
+
+def search_employee():
+    if not db.connection:
+        if not db.connect():
+            return
+
+    employee_id_valid, employee_id = validate_numeric(EmployeeID.get(), "ID Empleado")
+    if not employee_id_valid or not employee_id:
+        messagebox.showerror("Error", "Debe ingresar un ID de empleado válido")
+        return
+
+    success, result = db.call_procedure('sp_GetEmployee', (employee_id,))
+
+    if success and result:
+        employee = result[0]
+        LastName.delete(0, tk.END)
+        LastName.insert(0, employee[1] if employee[1] else "")
+        FirstName.delete(0, tk.END)
+        FirstName.insert(0, employee[2] if employee[2] else "")
+        BirthDate.delete(0, tk.END)
+        if employee[3]:
+            BirthDate.insert(0, employee[3].strftime("%Y-%m-%d"))
+        Photo.delete(0, tk.END)
+        Photo.insert(0, employee[4] if employee[4] else "")
+        Notes.delete('1.0', tk.END)
+        Notes.insert('1.0', employee[5] if employee[5] else "")
+    else:
+        messagebox.showinfo("No encontrado", "Empleado no encontrado")
+
+
+def clear_employee_form():
+    EmployeeID.delete(0, tk.END)
+    LastName.delete(0, tk.END)
+    FirstName.delete(0, tk.END)
+    BirthDate.delete(0, tk.END)
+    Photo.delete(0, tk.END)
+    Notes.delete('1.0', tk.END)
+
+
+def load_employees_list():
+    if not db.connection:
+        if not db.connect():
+            return
+
+    success, results = db.call_procedure('sp_GetAllEmployees')
+    if success:
+        for item in employees_tree.get_children():
+            employees_tree.delete(item)
+
+        for employee in results:
+            # Formatear fecha para mostrar
+            birth_date_str = employee[3].strftime("%Y-%m-%d") if employee[3] else ""
+            display_data = (employee[0], employee[1], employee[2], birth_date_str, employee[4],
+                            employee[5][:50] + "..." if employee[5] and len(employee[5]) > 50 else employee[5])
+            employees_tree.insert('', 'end', values=display_data)
+
+
+# =================== FUNCIONES DE EVENTOS PARA LISTAS ===================
+def on_product_select(event):
+    selection = products_tree.selection()
+    if selection:
+        item = products_tree.item(selection[0])
+        values = item['values']
+
+        ProductID.delete(0, tk.END)
+        ProductID.insert(0, values[0])
+        ProductName.delete(0, tk.END)
+        ProductName.insert(0, values[1])
+        SupplierID.delete(0, tk.END)
+        SupplierID.insert(0, values[2] if values[2] else "")
+        CategoryID.delete(0, tk.END)
+        CategoryID.insert(0, values[3] if values[3] else "")
+        Unit.delete(0, tk.END)
+        Unit.insert(0, values[4] if values[4] else "")
+        Price.delete(0, tk.END)
+        Price.insert(0, values[5] if values[5] else "")
+
+
+def on_customer_select(event):
+    selection = customers_tree.selection()
+    if selection:
+        item = customers_tree.item(selection[0])
+        values = item['values']
+
+        CustomerID.delete(0, tk.END)
+        CustomerID.insert(0, values[0])
+        CustomerName.delete(0, tk.END)
+        CustomerName.insert(0, values[1])
+        ContactName.delete(0, tk.END)
+        ContactName.insert(0, values[2] if values[2] else "")
+        Address.delete(0, tk.END)
+        Address.insert(0, values[3] if values[3] else "")
+        City.delete(0, tk.END)
+        City.insert(0, values[4] if values[4] else "")
+        PostalCode.delete(0, tk.END)
+        PostalCode.insert(0, values[5] if values[5] else "")
+        Country.delete(0, tk.END)
+        Country.insert(0, values[6] if values[6] else "")
+
+
+def on_employee_select(event):
+    selection = employees_tree.selection()
+    if selection:
+        item = employees_tree.item(selection[0])
+        values = item['values']
+
+        EmployeeID.delete(0, tk.END)
+        EmployeeID.insert(0, values[0])
+        LastName.delete(0, tk.END)
+        LastName.insert(0, values[1])
+        FirstName.delete(0, tk.END)
+        FirstName.insert(0, values[2])
+        BirthDate.delete(0, tk.END)
+        BirthDate.insert(0, values[3] if values[3] else "")
+        Photo.delete(0, tk.END)
+        Photo.insert(0, values[4] if values[4] else "")
+        Notes.delete('1.0', tk.END)
+        Notes.insert('1.0', values[5] if values[5] else "")
+
+
+# =================== INTERFAZ GRÁFICA ===================
+# Crear la ventana principal
+root = tk.Tk()
+root.geometry('1200x700')
+root.title("Northwind Management")
+
+# Conectar a la base de datos al iniciar
+if not db.connect():
+    root.destroy()
+    exit()
+
+# Crear el widget Notebook (pestañas)
+notebook = ttk.Notebook(root)
+
+# Crear los frames que irán dentro de las pestañas
+tab1 = ttk.Frame(notebook)
+tab2 = ttk.Frame(notebook)
+tab3 = ttk.Frame(notebook)
+
+# Añadir las pestañas al Notebook
+notebook.add(tab1, text="Products")
+notebook.add(tab2, text="Customers")
+notebook.add(tab3, text="Employees")
+
+# Empaquetar el Notebook para que se muestre en la ventana
+notebook.pack(expand=True, fill="both")
+
+# =================== PESTAÑA 1 (PRODUCTS) ===================
+# Crear frame principal para products
+main_frame_products = tk.Frame(tab1)
+main_frame_products.pack(fill="both", expand=True, padx=10, pady=10)
+
+# Frame izquierdo para formulario
+left_frame_products = tk.Frame(main_frame_products)
+left_frame_products.pack(side="left", fill="y", padx=(0, 10))
+
+# Título
+titulo = tk.Label(left_frame_products, text="GESTIÓN DE PRODUCTOS", font=("Arial", 16, "bold"), fg="green")
+titulo.pack(pady=20)
+
+# Frame para contener el formulario
+form_frame_products = tk.Frame(left_frame_products)
+form_frame_products.pack(pady=20, anchor="w", padx=20)
+
+# Campos del formulario
+tk.Label(form_frame_products, text="ProductID:", font=("Arial", 12)).grid(row=1, column=0, sticky="w", padx=(0, 10),
+                                                                          pady=8)
+ProductID = tk.Entry(form_frame_products, width=25, font=("Arial", 12), relief="solid", bd=1)
+ProductID.grid(row=1, column=1, sticky="w", pady=8)
+
+tk.Label(form_frame_products, text="ProductName:", font=("Arial", 12)).grid(row=2, column=0, sticky="w", padx=(0, 10),
+                                                                            pady=8)
+ProductName = tk.Entry(form_frame_products, width=25, font=("Arial", 12), relief="solid", bd=1)
+ProductName.grid(row=2, column=1, sticky="w", pady=8)
+
+tk.Label(form_frame_products, text="SupplierID:", font=("Arial", 12)).grid(row=3, column=0, sticky="w", padx=(0, 10),
+                                                                           pady=8)
+SupplierID = tk.Entry(form_frame_products, width=25, font=("Arial", 12), relief="solid", bd=1)
+SupplierID.grid(row=3, column=1, sticky="w", pady=8)
+
+tk.Label(form_frame_products, text="CategoryID:", font=("Arial", 12)).grid(row=4, column=0, sticky="w", padx=(0, 10),
+                                                                           pady=8)
+CategoryID = tk.Entry(form_frame_products, width=25, font=("Arial", 12), relief="solid", bd=1)
+CategoryID.grid(row=4, column=1, sticky="w", pady=8)
+
+tk.Label(form_frame_products, text="Unit:", font=("Arial", 12)).grid(row=5, column=0, sticky="w", padx=(0, 10), pady=8)
+Unit = tk.Entry(form_frame_products, width=25, font=("Arial", 12), relief="solid", bd=1)
+Unit.grid(row=5, column=1, sticky="w", pady=8)
+
+tk.Label(form_frame_products, text="Price:", font=("Arial", 12)).grid(row=6, column=0, sticky="w", padx=(0, 10), pady=8)
+Price = tk.Entry(form_frame_products, width=25, font=("Arial", 12), relief="solid", bd=1)
+Price.grid(row=6, column=1, sticky="w", pady=8)
+
+# Frame para botones
+button_frame_products = tk.Frame(left_frame_products)
+button_frame_products.pack(pady=20)
+
+btn_save_product = tk.Button(button_frame_products, text="Guardar", font=("Arial", 10), bg="#4CAF50", fg="white",
+                             width=10, command=save_product)
+btn_save_product.pack(side=tk.LEFT, padx=3)
+
+btn_update_product = tk.Button(button_frame_products, text="Actualizar", font=("Arial", 10), bg="#2196F3", fg="white",
+                               width=10, command=update_product)
+btn_update_product.pack(side=tk.LEFT, padx=3)
+
+btn_delete_product = tk.Button(button_frame_products, text="Eliminar", font=("Arial", 10), bg="#f44336", fg="white",
+                               width=10, command=delete_product)
+btn_delete_product.pack(side=tk.LEFT, padx=3)
+
+btn_search_product = tk.Button(button_frame_products, text="Buscar", font=("Arial", 10), bg="#FF9800", fg="white",
+                               width=10, command=search_product)
+btn_search_product.pack(side=tk.LEFT, padx=3)
+
+btn_clear_product = tk.Button(button_frame_products, text="Limpiar", font=("Arial", 10), bg="#9E9E9E", fg="white",
+                              width=10, command=clear_product_form)
+btn_clear_product.pack(side=tk.LEFT, padx=3)
+
+# Frame derecho para lista
+right_frame_products = tk.Frame(main_frame_products)
+right_frame_products.pack(side="right", fill="both", expand=True)
+
+tk.Label(right_frame_products, text="LISTA DE PRODUCTOS", font=("Arial", 14, "bold")).pack(pady=10)
+
+# Treeview para mostrar productos
+products_tree = ttk.Treeview(right_frame_products, columns=('ID', 'Name', 'SupplierID', 'CategoryID', 'Unit', 'Price'),
+                             show='headings', height=20)
+products_tree.heading('ID', text='ID')
+products_tree.heading('Name', text='Nombre')
+products_tree.heading('SupplierID', text='Proveedor')
+products_tree.heading('CategoryID', text='Categoría')
+products_tree.heading('Unit', text='Unidad')
+products_tree.heading('Price', text='Precio')
+
+products_tree.column('ID', width=50)
+products_tree.column('Name', width=150)
+products_tree.column('SupplierID', width=80)
+products_tree.column('CategoryID', width=80)
+products_tree.column('Unit', width=80)
+products_tree.column('Price', width=80)
+
+products_tree.bind('<<TreeviewSelect>>', on_product_select)
+products_tree.pack(fill="both", expand=True, padx=10, pady=10)
+
+# Scrollbar para products
+scrollbar_products = ttk.Scrollbar(right_frame_products, orient="vertical", command=products_tree.yview)
+products_tree.configure(yscrollcommand=scrollbar_products.set)
+scrollbar_products.pack(side="right", fill="y")
+
+# =================== PESTAÑA 2 (CUSTOMERS) ===================
+main_frame_customers = tk.Frame(tab2)
+main_frame_customers.pack(fill="both", expand=True, padx=10, pady=10)
+
+left_frame_customers = tk.Frame(main_frame_customers)
+left_frame_customers.pack(side="left", fill="y", padx=(0, 10))
+
+titulo2 = tk.Label(left_frame_customers, text="GESTIÓN DE CLIENTES", font=("Arial", 16, "bold"), fg="green")
+titulo2.pack(pady=20)
+
+form_frame_customers = tk.Frame(left_frame_customers)
+form_frame_customers.pack(pady=20, anchor="w", padx=20)
+
+tk.Label(form_frame_customers, text="CustomerID:", font=("Arial", 12)).grid(row=1, column=0, sticky="w", padx=(0, 10),
+                                                                            pady=8)
+CustomerID = tk.Entry(form_frame_customers, width=25, font=("Arial", 12), relief="solid", bd=1)
+CustomerID.grid(row=1, column=1, sticky="w", pady=8)
+
+tk.Label(form_frame_customers, text="CustomerName:", font=("Arial", 12)).grid(row=2, column=0, sticky="w", padx=(0, 10),
+                                                                              pady=8)
+CustomerName = tk.Entry(form_frame_customers, width=25, font=("Arial", 12), relief="solid", bd=1)
+CustomerName.grid(row=2, column=1, sticky="w", pady=8)
+
+tk.Label(form_frame_customers, text="ContactName:", font=("Arial", 12)).grid(row=3, column=0, sticky="w", padx=(0, 10),
+                                                                             pady=8)
+ContactName = tk.Entry(form_frame_customers, width=25, font=("Arial", 12), relief="solid", bd=1)
+ContactName.grid(row=3, column=1, sticky="w", pady=8)
+
+tk.Label(form_frame_customers, text="Address:", font=("Arial", 12)).grid(row=4, column=0, sticky="w", padx=(0, 10),
+                                                                         pady=8)
+Address = tk.Entry(form_frame_customers, width=25, font=("Arial", 12), relief="solid", bd=1)
+Address.grid(row=4, column=1, sticky="w", pady=8)
+
+tk.Label(form_frame_customers, text="City:", font=("Arial", 12)).grid(row=5, column=0, sticky="w", padx=(0, 10), pady=8)
+City = tk.Entry(form_frame_customers, width=25, font=("Arial", 12), relief="solid", bd=1)
+City.grid(row=5, column=1, sticky="w", pady=8)
+
+tk.Label(form_frame_customers, text="PostalCode:", font=("Arial", 12)).grid(row=6, column=0, sticky="w", padx=(0, 10),
+                                                                            pady=8)
+PostalCode = tk.Entry(form_frame_customers, width=25, font=("Arial", 12), relief="solid", bd=1)
+PostalCode.grid(row=6, column=1, sticky="w", pady=8)
+
+tk.Label(form_frame_customers, text="Country:", font=("Arial", 12)).grid(row=7, column=0, sticky="w", padx=(0, 10),
+                                                                         pady=8)
+Country = tk.Entry(form_frame_customers, width=25, font=("Arial", 12), relief="solid", bd=1)
+Country.grid(row=7, column=1, sticky="w", pady=8)
+
+# Frame para botones de customers
+button_frame_customers = tk.Frame(left_frame_customers)
+button_frame_customers.pack(pady=20)
+
+btn_save_customer = tk.Button(button_frame_customers, text="Guardar", font=("Arial", 10), bg="#4CAF50", fg="white",
+                              width=10, command=save_customer)
+btn_save_customer.pack(side=tk.LEFT, padx=3)
+
+btn_update_customer = tk.Button(button_frame_customers, text="Actualizar", font=("Arial", 10), bg="#2196F3", fg="white",
+                                width=10, command=update_customer)
+btn_update_customer.pack(side=tk.LEFT, padx=3)
+
+btn_delete_customer = tk.Button(button_frame_customers, text="Eliminar", font=("Arial", 10), bg="#f44336", fg="white",
+                                width=10, command=delete_customer)
+btn_delete_customer.pack(side=tk.LEFT, padx=3)
+
+btn_search_customer = tk.Button(button_frame_customers, text="Buscar", font=("Arial", 10), bg="#FF9800", fg="white",
+                                width=10, command=search_customer)
+btn_search_customer.pack(side=tk.LEFT, padx=3)
+
+btn_clear_customer = tk.Button(button_frame_customers, text="Limpiar", font=("Arial", 10), bg="#9E9E9E", fg="white",
+                               width=10, command=clear_customer_form)
+btn_clear_customer.pack(side=tk.LEFT, padx=3)
+
+# Frame derecho para lista de customers
+right_frame_customers = tk.Frame(main_frame_customers)
+right_frame_customers.pack(side="right", fill="both", expand=True)
+
+tk.Label(right_frame_customers, text="LISTA DE CLIENTES", font=("Arial", 14, "bold")).pack(pady=10)
+
+# Treeview para mostrar customers
+customers_tree = ttk.Treeview(right_frame_customers,
+                              columns=('ID', 'Name', 'Contact', 'Address', 'City', 'Postal', 'Country'),
+                              show='headings', height=20)
+customers_tree.heading('ID', text='ID')
+customers_tree.heading('Name', text='Nombre')
+customers_tree.heading('Contact', text='Contacto')
+customers_tree.heading('Address', text='Dirección')
+customers_tree.heading('City', text='Ciudad')
+customers_tree.heading('Postal', text='C.P.')
+customers_tree.heading('Country', text='País')
+
+customers_tree.column('ID', width=50)
+customers_tree.column('Name', width=120)
+customers_tree.column('Contact', width=100)
+customers_tree.column('Address', width=120)
+customers_tree.column('City', width=80)
+customers_tree.column('Postal', width=60)
+customers_tree.column('Country', width=80)
+
+customers_tree.bind('<<TreeviewSelect>>', on_customer_select)
+customers_tree.pack(fill="both", expand=True, padx=10, pady=10)
+
+# Scrollbar para customers
+scrollbar_customers = ttk.Scrollbar(right_frame_customers, orient="vertical", command=customers_tree.yview)
+customers_tree.configure(yscrollcommand=scrollbar_customers.set)
+scrollbar_customers.pack(side="right", fill="y")
+
+# =================== PESTAÑA 3 (EMPLOYEES) ===================
+main_frame_employees = tk.Frame(tab3)
+main_frame_employees.pack(fill="both", expand=True, padx=10, pady=10)
+
+left_frame_employees = tk.Frame(main_frame_employees)
+left_frame_employees.pack(side="left", fill="y", padx=(0, 10))
+
+titulo3 = tk.Label(left_frame_employees, text="GESTIÓN DE EMPLEADOS", font=("Arial", 16, "bold"), fg="red")
+titulo3.pack(pady=20)
+
+form_frame_employees = tk.Frame(left_frame_employees)
+form_frame_employees.pack(pady=20, anchor="w", padx=20)
+
+tk.Label(form_frame_employees, text="EmployeeID:", font=("Arial", 12)).grid(row=1, column=0, sticky="w", padx=(0, 10),
+                                                                            pady=8)
+EmployeeID = tk.Entry(form_frame_employees, width=25, font=("Arial", 12), relief="solid", bd=1)
+EmployeeID.grid(row=1, column=1, sticky="w", pady=8)
+
+tk.Label(form_frame_employees, text="LastName:", font=("Arial", 12)).grid(row=2, column=0, sticky="w", padx=(0, 10),
+                                                                          pady=8)
+LastName = tk.Entry(form_frame_employees, width=25, font=("Arial", 12), relief="solid", bd=1)
+LastName.grid(row=2, column=1, sticky="w", pady=8)
+
+tk.Label(form_frame_employees, text="FirstName:", font=("Arial", 12)).grid(row=3, column=0, sticky="w", padx=(0, 10),
+                                                                           pady=8)
+FirstName = tk.Entry(form_frame_employees, width=25, font=("Arial", 12), relief="solid", bd=1)
+FirstName.grid(row=3, column=1, sticky="w", pady=8)
+
+tk.Label(form_frame_employees, text="BirthDate (YYYY-MM-DD):", font=("Arial", 12)).grid(row=4, column=0, sticky="w",
+                                                                                        padx=(0, 10), pady=8)
+BirthDate = tk.Entry(form_frame_employees, width=25, font=("Arial", 12), relief="solid", bd=1)
+BirthDate.grid(row=4, column=1, sticky="w", pady=8)
+
+tk.Label(form_frame_employees, text="Photo:", font=("Arial", 12)).grid(row=5, column=0, sticky="w", padx=(0, 10),
+                                                                       pady=8)
+Photo = tk.Entry(form_frame_employees, width=25, font=("Arial", 12), relief="solid", bd=1)
+Photo.grid(row=5, column=1, sticky="w", pady=8)
+
+tk.Label(form_frame_employees, text="Notes:", font=("Arial", 12)).grid(row=6, column=0, sticky="nw", padx=(0, 10),
+                                                                       pady=8)
+Notes = tk.Text(form_frame_employees, width=25, height=4, font=("Arial", 12), relief="solid", bd=1)
+Notes.grid(row=6, column=1, sticky="w", pady=8)
+
+# Frame para botones de employees
+button_frame_employees = tk.Frame(left_frame_employees)
+button_frame_employees.pack(pady=20)
+
+btn_save_employee = tk.Button(button_frame_employees, text="Guardar", font=("Arial", 10), bg="#4CAF50", fg="white",
+                              width=10, command=save_employee)
+btn_save_employee.pack(side=tk.LEFT, padx=3)
+
+btn_update_employee = tk.Button(button_frame_employees, text="Actualizar", font=("Arial", 10), bg="#2196F3", fg="white",
+                                width=10, command=update_employee)
+btn_update_employee.pack(side=tk.LEFT, padx=3)
+
+btn_delete_employee = tk.Button(button_frame_employees, text="Eliminar", font=("Arial", 10), bg="#f44336", fg="white",
+                                width=10, command=delete_employee)
+btn_delete_employee.pack(side=tk.LEFT, padx=3)
+
+btn_search_employee = tk.Button(button_frame_employees, text="Buscar", font=("Arial", 10), bg="#FF9800", fg="white",
+                                width=10, command=search_employee)
+btn_search_employee.pack(side=tk.LEFT, padx=3)
+
+btn_clear_employee = tk.Button(button_frame_employees, text="Limpiar", font=("Arial", 10), bg="#9E9E9E", fg="white",
+                               width=10, command=clear_employee_form)
+btn_clear_employee.pack(side=tk.LEFT, padx=3)
+
+# Frame derecho para lista de employees
+right_frame_employees = tk.Frame(main_frame_employees)
+right_frame_employees.pack(side="right", fill="both", expand=True)
+
+tk.Label(right_frame_employees, text="LISTA DE EMPLEADOS", font=("Arial", 14, "bold")).pack(pady=10)
+
+# Treeview para mostrar employees
+employees_tree = ttk.Treeview(right_frame_employees,
+                              columns=('ID', 'LastName', 'FirstName', 'BirthDate', 'Photo', 'Notes'), show='headings',
+                              height=20)
+employees_tree.heading('ID', text='ID')
+employees_tree.heading('LastName', text='Apellido')
+employees_tree.heading('FirstName', text='Nombre')
+employees_tree.heading('BirthDate', text='Fecha Nac.')
+employees_tree.heading('Photo', text='Foto')
+employees_tree.heading('Notes', text='Notas')
+
+employees_tree.column('ID', width=50)
+employees_tree.column('LastName', width=100)
+employees_tree.column('FirstName', width=100)
+employees_tree.column('BirthDate', width=100)
+employees_tree.column('Photo', width=80)
+employees_tree.column('Notes', width=150)
+
+employees_tree.bind('<<TreeviewSelect>>', on_employee_select)
+employees_tree.pack(fill="both", expand=True, padx=10, pady=10)
+
+# Scrollbar para employees
+scrollbar_employees = ttk.Scrollbar(right_frame_employees, orient="vertical", command=employees_tree.yview)
+employees_tree.configure(yscrollcommand=scrollbar_employees.set)
+scrollbar_employees.pack(side="right", fill="y")
+
+
+# =================== CARGAR DATOS INICIALES ===================
+def load_initial_data():
+    load_products_list()
+    load_customers_list()
+    load_employees_list()
+
+
+# Cargar datos al iniciar
+root.after(1000, load_initial_data)  # Cargar después de 1 segundo
+
+
+# =================== FUNCIÓN DE CIERRE ===================
+def on_closing():
+    db.disconnect()
+    root.destroy()
+
+
+root.protocol("WM_DELETE_WINDOW", on_closing)
+
+# Ejecutar la aplicación
+root.mainloop()
