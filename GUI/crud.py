@@ -102,7 +102,7 @@ class EmployeeApp(tk.Tk):
             messagebox.showwarning("Advertencia", "Por favor, ingrese un ID de empleado")
             return
 
-        results = self.db_connector.execute_procedure('GetEmployeeByID', employee_id)
+        results = self.db_connector.execute_procedure('sp_GetEmployee', employee_id)
         if results:
             self.display_results(results)
         else:
@@ -110,7 +110,7 @@ class EmployeeApp(tk.Tk):
 
     def insert_employee(self):
         values = [self.entries[field].get() for field in self.fields[1:]]  # Excluimos EmployeeID
-        results = self.db_connector.execute_procedure('InsertarDatos', *values)
+        results = self.db_connector.execute_procedure('sp_InsertEmployee', *values)
         if results is not None:
             messagebox.showinfo("Éxito", "Empleado insertado correctamente")
             self.clear_fields()
@@ -118,7 +118,7 @@ class EmployeeApp(tk.Tk):
 
     def update_employee(self):
         values = [self.entries[field].get() for field in self.fields]
-        results = self.db_connector.execute_procedure('ActualizarEmpleado', *values)
+        results = self.db_connector.execute_procedure('sp_UpdateEmployee', *values)
         if results is not None:
             messagebox.showinfo("Éxito", "Empleado actualizado correctamente")
             self.show_all_employees()
@@ -130,14 +130,14 @@ class EmployeeApp(tk.Tk):
             return
 
         if messagebox.askyesno("Confirmar", "¿Está seguro de que desea eliminar este empleado?"):
-            results = self.db_connector.execute_procedure('BorrarEmpleado', employee_id)
+            results = self.db_connector.execute_procedure('sp_DeleteEmployee', employee_id)
             if results is not None:
                 messagebox.showinfo("Éxito", "Empleado eliminado correctamente")
                 self.clear_fields()
                 self.show_all_employees()
 
     def show_all_employees(self):
-        results = self.db_connector.execute_procedure('DetalleEmpleados')
+        results = self.db_connector.execute_procedure('sp_GetAllEmployees')
         if results:
             self.display_results(results)
 
@@ -155,7 +155,7 @@ class EmployeeApp(tk.Tk):
 user = 'root'
 password = 'base1234'
 host = 'localhost'
-database = 'Northwind'
+database = 'Northwindx'
 
 # Crear y conectar a la base de datos(los objetos de conexion se deben crear antes de la app(ojala los olviden))
 db_connector = DatabaseConnector(host, user, password, database)
