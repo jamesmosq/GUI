@@ -63,7 +63,7 @@ contador = [0]
 def contar():
     contador[0] += 1
     lbl_contador.config(text=f"Clics: {contador[0]}")
-    if contador[0] == 5:
+    if contador[0] == 15:
         messagebox.showinfo("Meta", "¡Llegaste a 5 clics!")
 
 tk.Button(root, text="Clic aquí",

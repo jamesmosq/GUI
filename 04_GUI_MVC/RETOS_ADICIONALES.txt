@@ -1,0 +1,259 @@
+====================================================================
+ RETOS_ADICIONALES.txt
+ Dos retos opcionales para practicar más sobre la app MVC
+====================================================================
+
+Si ya completaste el módulo de Shippers (COMO_AGREGAR_UN_MODULO.txt)
+y quieres seguir practicando, aquí tienes dos retos cortos e
+independientes entre sí. Puedes hacer uno, el otro, o los dos, en
+el orden que quieras.
+
+
+====================================================================
+ RETO 1 — Mostrar la foto de cada empleado
+====================================================================
+
+¿QUÉ VAMOS A LOGRAR?
+------------------------
+Ahora mismo, en la pestaña de Employees, el campo "Photo" es solo
+texto (por ejemplo "EmpID1.pic"): es el NOMBRE de un archivo, pero
+la imagen nunca se ve en pantalla. En este reto vas a hacer que,
+al lado del formulario, aparezca de verdad la fotografía del
+empleado seleccionado, y vas a poder elegir una foto desde tu
+computador para guardarla.
+
+Este reto ya está resuelto en otro archivo del repositorio
+(03_GUI_DB/04_crud_empleados_foto.py) — lo que vas a hacer es
+adaptar esa misma idea a la versión MVC, respetando las capas: la
+Vista solo dibuja la imagen, el Controlador decide qué archivo usar.
+
+
+PASO 1 — Instalar la librería que lee imágenes
+----------------------------------------------------
+Tkinter, por sí solo, no sabe abrir archivos .jpg. Para eso se usa
+una librería llamada Pillow. Ábrela desde la terminal, dentro de tu
+entorno virtual:
+
+    pip install pillow
+
+Se importa en el código como "PIL" (así se llamaba originalmente
+esta librería):
+
+    from PIL import Image, ImageTk
+
+
+PASO 2 — Agregar un espacio para la foto en la Vista
+------------------------------------------------------------
+Abre views/employee_view.py. Justo antes de crear los botones
+(Guardar, Actualizar, etc.), agrega un recuadro con un botón para
+elegir la foto y una etiqueta (Label) donde se va a mostrar:
+
+    photo_frame = tk.LabelFrame(left, text="Foto del Empleado", padx=10, pady=10)
+    photo_frame.pack(pady=(0, 10))
+
+    tk.Button(photo_frame, text="Seleccionar Foto",
+              font=("Arial", 10, "bold"), bg="#2196F3", fg="white",
+              command=lambda: self.controller.seleccionar_foto()).pack(pady=5)
+
+    self.photo_label = tk.Label(photo_frame, text="Sin imagen",
+                                 width=15, height=8, relief="solid", bd=1)
+    self.photo_label.pack(pady=5)
+
+Y agrega este método dentro de la clase EmployeeView (junto a los
+otros métodos, como set_form_data): es el único lugar donde la
+vista "sabe" mostrar una imagen, pero fíjate que RECIBE la imagen
+ya lista — no abre el archivo ella misma, eso lo hace el
+controlador:
+
+    def mostrar_foto(self, photo_image):
+        if photo_image is not None:
+            self.photo_label.config(image=photo_image, text="")
+            self.photo_label.image = photo_image  # evita que Python la borre de memoria
+        else:
+            self.photo_label.config(image="", text="Sin imagen")
+
+
+PASO 3 — Enseñarle al Controlador a manejar la foto
+------------------------------------------------------------
+Abre controllers/employee_controller.py. Vas a necesitar tres cosas
+nuevas: elegir un archivo del computador, copiarlo a una carpeta
+local del proyecto, y convertirlo a un formato que Tkinter entienda.
+
+Agrega estos imports al inicio del archivo:
+
+    import os
+    import shutil
+    from tkinter import filedialog
+    from PIL import Image, ImageTk
+
+Y agrega este atributo en __init__, para recordar qué foto se
+seleccionó mientras el usuario llena el formulario:
+
+    self.foto_seleccionada = None   # ruta del archivo elegido
+    self.foto_actual = None         # imagen ya convertida (para mostrarla)
+
+Ahora el método para elegir la foto (este es el que llama el botón
+"Seleccionar Foto" de la vista):
+
+    def seleccionar_foto(self):
+        ruta = filedialog.askopenfilename(
+            title="Selecciona una foto",
+            filetypes=[("Imágenes", "*.jpg *.jpeg *.png *.gif *.bmp")])
+        if not ruta:
+            return  # el usuario cerró el diálogo sin elegir nada
+        self.foto_seleccionada = ruta
+        self._mostrar_foto_desde_archivo(ruta)
+
+Y un método auxiliar que abre el archivo con Pillow, lo achica
+(para que no ocupe toda la pantalla) y se lo entrega a la vista:
+
+    def _mostrar_foto_desde_archivo(self, ruta):
+        try:
+            imagen = Image.open(ruta)
+            imagen.thumbnail((120, 120))       # la reduce sin deformarla
+            self.foto_actual = ImageTk.PhotoImage(imagen)
+            self.view.mostrar_foto(self.foto_actual)
+        except Exception as e:
+            messagebox.showwarning("Imagen", f"No se pudo abrir la imagen:\n{e}")
+            self.view.mostrar_foto(None)
+
+
+PASO 4 — Guardar la foto al insertar o actualizar
+------------------------------------------------------------
+Cuando el usuario guarda un empleado, si eligió una foto nueva, hay
+que copiarla a una carpeta local (para no depender de que el
+archivo original siga en su computador) y guardar SOLO el nombre
+del archivo en la base de datos (así funciona hoy la columna Photo).
+
+Agrega este método auxiliar:
+
+    def _guardar_foto_local(self):
+        """Copia la foto elegida a una carpeta img/ del proyecto
+        y devuelve el nombre de archivo para guardar en la BD."""
+        if not self.foto_seleccionada:
+            return None
+        os.makedirs("img", exist_ok=True)
+        nombre = os.path.basename(self.foto_seleccionada)
+        destino = os.path.join("img", nombre)
+        shutil.copy(self.foto_seleccionada, destino)
+        return nombre
+
+Y en el método guardar() (el que ya existe), donde se llama a
+self.model.insert(...), reemplaza el valor que le pasas a "Photo"
+por el resultado de este nuevo método:
+
+    ANTES:
+        success, result = self.model.insert(
+            data["LastName"], data["FirstName"], birth_date,
+            data["Photo"] or None, data["Notes"] or None)
+
+    DESPUÉS:
+        nombre_foto = self._guardar_foto_local() or data["Photo"] or None
+        success, result = self.model.insert(
+            data["LastName"], data["FirstName"], birth_date,
+            nombre_foto, data["Notes"] or None)
+
+Haz el mismo cambio en actualizar(), reemplazando el valor de Photo
+que se le pasa a self.model.update(...).
+
+
+PASO 5 — Mostrar la foto al buscar o seleccionar un empleado
+------------------------------------------------------------------
+Falta un detalle: cuando el usuario busca un empleado o hace clic
+en una fila del Treeview, también debería verse su foto (si existe
+un archivo con ese nombre dentro de la carpeta img/).
+
+En el método buscar() y en on_select(), después de llenar el
+formulario con self.view.set_form_data(...), agrega:
+
+    ruta_foto = os.path.join("img", nombre_foto_del_empleado)
+    if os.path.exists(ruta_foto):
+        self._mostrar_foto_desde_archivo(ruta_foto)
+    else:
+        self.view.mostrar_foto(None)
+
+(Reemplaza "nombre_foto_del_empleado" por el valor real de Photo en
+cada caso — en buscar() viene de result[0], en on_select() viene de
+los values de la fila del Treeview.)
+
+
+PASO 6 — Probar
+-------------------
+Ejecuta "python main.py", ve a la pestaña Employees, selecciona un
+empleado existente (probablemente diga "Sin imagen" porque no hay
+fotos reales todavía), haz clic en "Seleccionar Foto", elige
+cualquier imagen de tu computador y guarda. La próxima vez que
+busques ese mismo empleado, su foto debería aparecer.
+
+
+====================================================================
+ RETO 2 — Ponerle un ícono a la ventana (el "favicon" de escritorio)
+====================================================================
+
+¿QUÉ ES ESTO?
+----------------
+En una página web, el "favicon" es el iconito que aparece en la
+pestaña del navegador. En una aplicación de escritorio como esta,
+el equivalente se llama simplemente "ícono de la ventana": es la
+imagen pequeña que aparece en la barra de título y en la barra de
+tareas de Windows. Ahora mismo tu app usa el ícono genérico de
+Python (la hoja de café). Vamos a cambiarlo por uno propio.
+
+Este reto es mucho más corto que el anterior: es una sola línea de
+código, pero hay que preparar bien el archivo de imagen primero.
+
+
+PASO 1 — Conseguir un archivo de ícono
+------------------------------------------
+Necesitas una imagen cuadrada pequeña (por ejemplo 32x32 o 64x64
+píxeles). Tienes dos caminos, según el formato:
+
+  Opción A (solo Windows): un archivo .ico
+    Puedes crear uno gratis en una página como favicon.io o
+    convertir cualquier imagen .png a .ico con un conversor online.
+
+  Opción B (funciona en Windows, Mac y Linux): un archivo .png
+    Esta opción es más portable — recomendada si no estás seguro.
+
+Cuando tengas el archivo, créale una carpeta al proyecto y ponlo
+ahí, por ejemplo:
+
+    04_GUI_MVC/assets/icono.ico
+    (o 04_GUI_MVC/assets/icono.png si usas la Opción B)
+
+
+PASO 2 — Decirle a la ventana que use ese ícono
+------------------------------------------------------
+Abre views/main_view.py. Justo después de la línea donde se define
+self.geometry('1200x700'), agrega UNA de estas dos opciones, según
+el archivo que hayas preparado:
+
+    Si usaste un .ico (solo funciona bien en Windows):
+
+        self.iconbitmap("assets/icono.ico")
+
+    Si usaste un .png (más portable, recomendado):
+
+        self.icono_ventana = tk.PhotoImage(file="assets/icono.png")
+        self.iconphoto(True, self.icono_ventana)
+
+    (Guardamos la imagen en self.icono_ventana por la misma razón
+    del Reto 1: si nadie más la referencia, Python la borra de
+    memoria y el ícono desaparece.)
+
+
+PASO 3 — Probar
+-------------------
+Ejecuta "python main.py" de nuevo. Deberías ver tu ícono en la
+barra de título de la ventana y, si te fijas en la barra de tareas
+de Windows mientras la app está abierta, también ahí.
+
+
+¿QUÉ APRENDISTE?
+--------------------
+En el Reto 1 viste cómo una funcionalidad "extra" (mostrar
+imágenes) se reparte entre capas sin romper el patrón: la Vista
+solo dibuja lo que le entregan, el Controlador decide qué archivo
+abrir y cómo guardarlo. En el Reto 2 viste que hasta un cambio
+puramente visual, como el ícono, vive en la capa de Vista — nunca
+en el Modelo ni en el Controlador.

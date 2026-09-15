@@ -25,8 +25,8 @@ from tkcalendar import DateEntry
 DB_CONFIG = {
     "host":     "localhost",
     "user":     "root",
-    "password": "",          # ← tu contraseña de MySQL
-    "database": "Northwind"
+    "password": "base1234",          # ← tu contraseña de MySQL
+    "database": "Northwindx"
 }
 
 

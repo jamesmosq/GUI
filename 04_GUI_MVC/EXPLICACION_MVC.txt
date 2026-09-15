@@ -1,0 +1,153 @@
+====================================================================
+ EXPLICACION_MVC.txt
+ Qué se construyó en 04_GUI_MVC y por qué
+====================================================================
+
+OBJETIVO
+--------
+Esta carpeta es la MISMA aplicación que ya conocías en
+01_Gui_POO/32_northwind_crud_bd.py (CRUD de Products, Customers y
+Employees, con Treeview y Stored Procedures sobre la BD Northwindx),
+pero reescrita con el patrón MVC (Modelo - Vista - Controlador).
+
+El comportamiento que ve el usuario es idéntico. Lo que cambia es
+CÓMO está organizado el código por dentro.
+
+
+1. ¿QUÉ PROBLEMA TENÍA EL ARCHIVO ORIGINAL?
+--------------------------------------------
+En 32_northwind_crud_bd.py, todo vive en un solo archivo de ~680
+líneas:
+  - la conexión a MySQL
+  - las funciones save_product(), update_product(), etc.
+  - la creación de los widgets (Entry, Treeview, Button...)
+  - la lectura de esos widgets (ProductName.get(), etc.)
+
+Esto funciona, pero mezcla tres responsabilidades muy distintas en
+el mismo lugar: "hablar con la BD", "decidir qué es válido" y
+"dibujar la pantalla". Si mañana quieres cambiar el motor de BD, o
+poner esta misma lógica detrás de una API en vez de una ventana,
+tendrías que desenredar todo el archivo.
+
+
+2. LA IDEA DE MVC
+-------------------
+MVC separa el código en tres capas que NO se mezclan:
+
+  MODELO (models/)
+    Sabe hablar con la base de datos (llamar Stored Procedures).
+    No sabe nada de Tkinter. No decide si un dato es válido.
+    Si un ProductName viene vacío, al modelo no le importa: solo
+    ejecuta el SP que le pidan.
+
+  VISTA (views/)
+    Sabe dibujar widgets de Tkinter (Entry, Treeview, botones).
+    No sabe nada de MySQL. No decide si un dato es válido.
+    Cuando el usuario hace clic en "Guardar", la vista NO guarda
+    nada: solo avisa al controlador ("controller.guardar()").
+
+  CONTROLADOR (controllers/)
+    Es el único que conoce a la vista Y al modelo.
+    Lee lo que el usuario escribió (view.get_form_data()),
+    valida (utils/validators.py), y si está OK, le pide al modelo
+    que ejecute el SP correspondiente. Con el resultado, actualiza
+    la vista (mensajes, refrescar el Treeview, limpiar el formulario).
+
+En una frase: la Vista pregunta "¿qué hago?", el Controlador decide,
+el Modelo ejecuta contra la BD.
+
+
+3. MAPA DE ARCHIVOS
+---------------------
+04_GUI_MVC/
+  config.py                     - credenciales de conexión a MySQL
+  main.py                       - punto de entrada (python main.py)
+
+  models/
+    database.py                 - DatabaseConnector: conecta y
+                                   ejecuta Stored Procedures (SP).
+                                   Es la ÚNICA clase que importa
+                                   mysql.connector en todo el proyecto.
+    product_model.py             - CRUD de Products (sp_InsertProduct,
+                                    sp_UpdateProduct, sp_DeleteProduct,
+                                    sp_GetProduct, sp_GetAllProducts)
+    customer_model.py            - lo mismo para Customers
+    employee_model.py            - lo mismo para Employees
+
+  views/
+    main_view.py                 - ventana raíz + Notebook (3 pestañas)
+    product_view.py              - formulario + Treeview de Products
+    customer_view.py             - formulario + Treeview de Customers
+    employee_view.py             - formulario + Treeview de Employees
+                                    (usa DateEntry de tkcalendar para
+                                    BirthDate, igual que
+                                    03_GUI_DB/03_crud_empleados_sp.py)
+
+  controllers/
+    main_controller.py           - conecta a la BD, crea la ventana
+                                    y un controlador por entidad
+    product_controller.py        - validación + orquestación de Products
+    customer_controller.py       - lo mismo para Customers
+    employee_controller.py       - lo mismo para Employees
+
+  utils/
+    validators.py                - validate_required, validate_numeric,
+                                    validate_date: funciones puras,
+                                    sin Tkinter ni BD, reutilizadas por
+                                    los 3 controladores.
+
+
+4. CÓMO FLUYE UNA OPERACIÓN (ejemplo: guardar un producto)
+-------------------------------------------------------------
+  1. El usuario llena el formulario y hace clic en "Guardar".
+  2. product_view.py NO hace nada por sí sola: el botón tiene
+     command=lambda: self.controller.guardar()
+  3. product_controller.guardar():
+       a) data = self.view.get_form_data()      -> lee los Entry
+       b) valida con utils/validators.py         -> ¿nombre vacío?
+                                                     ¿precio no numérico?
+       c) si algo falla: messagebox.showerror() y return (nunca
+          llega a tocar la BD)
+       d) si todo OK: self.model.insert(...)      -> llama al modelo
+  4. product_model.insert() arma la tupla de parámetros y llama a
+     self.db.call_procedure('sp_InsertProduct', (...))
+  5. database.py ejecuta el SP contra Northwindx y hace commit/rollback.
+  6. El resultado (éxito/error) sube de vuelta: modelo -> controlador.
+  7. El controlador muestra el messagebox de éxito, limpia el
+     formulario (view.clear_form()) y recarga la lista
+     (view.set_tree_data(...)).
+
+Fíjate que en ningún punto la vista ejecuta SQL, y en ningún punto
+el modelo decide si el precio es válido. Cada capa hace una sola cosa.
+
+
+5. ¿POR QUÉ ESTO ES ÚTIL PARA APRENDER?
+-------------------------------------------
+  - Se puede cambiar la interfaz (por ejemplo pasar de Tkinter a
+    otra librería) sin tocar una sola línea de models/.
+  - Se puede cambiar de MySQL a otra base de datos tocando solo
+    models/database.py, y ni las vistas ni los controladores se
+    enteran.
+  - Las validaciones (utils/validators.py) se prueban solas, sin
+    necesidad de abrir una ventana, porque no dependen de Tkinter.
+  - Agregar una entidad nueva (Categories, Suppliers, Shippers...)
+    es repetir el mismo patrón de 3 archivos: consulta
+    COMO_AGREGAR_UN_MODULO.txt en esta misma carpeta para un
+    ejemplo guiado completo con el módulo de Shippers.
+
+
+6. STORED PROCEDURES USADOS
+------------------------------
+Definidos en 03_GUI_DB/northwind_stored_procedures.sql, sobre la
+base de datos Northwindx:
+
+  Products:  sp_InsertProduct, sp_UpdateProduct, sp_DeleteProduct,
+             sp_GetProduct, sp_GetAllProducts
+  Customers: sp_InsertCustomer, sp_UpdateCustomer, sp_DeleteCustomer,
+             sp_GetCustomer, sp_GetAllCustomers
+  Employees: sp_InsertEmployee, sp_UpdateEmployee, sp_DeleteEmployee,
+             sp_GetEmployee, sp_GetAllEmployees
+
+El proyecto NO usa (todavía) sp_SearchProducts/Customers/Employees
+ni sp_GetAllCategories/Suppliers/Shippers, que también existen en
+el script SQL. Quedan como posibles ejercicios adicionales.

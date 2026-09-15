@@ -1,0 +1,490 @@
+====================================================================
+ COMO_AGREGAR_UN_MODULO.txt
+ Ejercicio guiado: agregar el módulo de Shippers (MVC)
+====================================================================
+
+OBJETIVO
+--------
+La app en 04_GUI_MVC ya tiene 3 módulos completos: Products,
+Customers y Employees. En este ejercicio vas a agregar un CUARTO
+módulo, Shippers (empresas de envío), siguiendo exactamente el
+mismo patrón.
+
+Antes de empezar, lee EXPLICACION_MVC.txt (en esta misma carpeta)
+si todavía no entiendes por qué el código está separado en
+models / views / controllers.
+
+La tabla Shippers ya existe en la base de datos Northwindx:
+
+    CREATE TABLE Shippers(
+        ShipperID    INTEGER PRIMARY KEY AUTO_INCREMENT,
+        ShipperName  VARCHAR(25),
+        Phone        VARCHAR(15)
+    );
+
+Y ya existe UN solo Stored Procedure para ella (sp_GetAllShippers),
+pero le faltan los de Insertar, Actualizar, Eliminar y Buscar por ID.
+Vas a escribirlos tú.
+
+
+PASO 1 — Crear los Stored Procedures que faltan
+--------------------------------------------------
+Abre una consola de MySQL conectado a Northwindx (o un cliente como
+MySQL Workbench / DBeaver) y ejecuta lo siguiente. Fíjate que sigue
+EXACTAMENTE el mismo estilo que los procedimientos de Products en
+03_GUI_DB/northwind_stored_procedures.sql (transacción + EXIT
+HANDLER + verificación de existencia antes de actualizar/eliminar):
+
+    USE Northwindx;
+    DELIMITER //
+
+    -- 1. INSERTAR SHIPPER
+    CREATE PROCEDURE sp_InsertShipper(
+        IN p_ShipperName VARCHAR(25),
+        IN p_Phone VARCHAR(15)
+    )
+    BEGIN
+        DECLARE EXIT HANDLER FOR SQLEXCEPTION
+        BEGIN
+            ROLLBACK;
+            RESIGNAL;
+        END;
+
+        START TRANSACTION;
+
+        INSERT INTO Shippers (ShipperName, Phone)
+        VALUES (p_ShipperName, p_Phone);
+
+        COMMIT;
+
+        SELECT LAST_INSERT_ID() AS ShipperID, 'Shipper insertado correctamente' AS Message;
+    END//
+
+    -- 2. ACTUALIZAR SHIPPER
+    CREATE PROCEDURE sp_UpdateShipper(
+        IN p_ShipperID INT,
+        IN p_ShipperName VARCHAR(25),
+        IN p_Phone VARCHAR(15)
+    )
+    BEGIN
+        DECLARE v_count INT DEFAULT 0;
+        DECLARE EXIT HANDLER FOR SQLEXCEPTION
+        BEGIN
+            ROLLBACK;
+            RESIGNAL;
+        END;
+
+        START TRANSACTION;
+
+        SELECT COUNT(*) INTO v_count FROM Shippers WHERE ShipperID = p_ShipperID;
+        IF v_count = 0 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'El shipper no existe';
+        END IF;
+
+        UPDATE Shippers
+        SET ShipperName = p_ShipperName,
+            Phone = p_Phone
+        WHERE ShipperID = p_ShipperID;
+
+        COMMIT;
+
+        SELECT 'Shipper actualizado correctamente' AS Message;
+    END//
+
+    -- 3. ELIMINAR SHIPPER
+    CREATE PROCEDURE sp_DeleteShipper(
+        IN p_ShipperID INT
+    )
+    BEGIN
+        DECLARE v_count INT DEFAULT 0;
+        DECLARE EXIT HANDLER FOR SQLEXCEPTION
+        BEGIN
+            ROLLBACK;
+            RESIGNAL;
+        END;
+
+        START TRANSACTION;
+
+        SELECT COUNT(*) INTO v_count FROM Shippers WHERE ShipperID = p_ShipperID;
+        IF v_count = 0 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'El shipper no existe';
+        END IF;
+
+        -- Un shipper con órdenes asociadas no se puede borrar
+        SELECT COUNT(*) INTO v_count FROM Orders WHERE ShipperID = p_ShipperID;
+        IF v_count > 0 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'No se puede eliminar: el shipper tiene órdenes asociadas';
+        END IF;
+
+        DELETE FROM Shippers WHERE ShipperID = p_ShipperID;
+
+        COMMIT;
+
+        SELECT 'Shipper eliminado correctamente' AS Message;
+    END//
+
+    -- 4. OBTENER SHIPPER POR ID
+    CREATE PROCEDURE sp_GetShipper(
+        IN p_ShipperID INT
+    )
+    BEGIN
+        SELECT ShipperID, ShipperName, Phone
+        FROM Shippers
+        WHERE ShipperID = p_ShipperID;
+    END//
+
+    -- 5. reemplazar sp_GetAllShippers para que también traiga Phone
+    --    (el original solo trae ShipperID y ShipperName, pensado
+    --    para un combobox; para esta pantalla de administración
+    --    necesitamos las 3 columnas)
+    DROP PROCEDURE IF EXISTS sp_GetAllShippers//
+    CREATE PROCEDURE sp_GetAllShippers()
+    BEGIN
+        SELECT ShipperID, ShipperName, Phone
+        FROM Shippers
+        ORDER BY ShipperName;
+    END//
+
+    DELIMITER ;
+
+Verifica que se crearon corriendo:  SHOW PROCEDURE STATUS WHERE Db='Northwindx';
+
+
+PASO 2 — Crear el modelo: models/shipper_model.py
+------------------------------------------------------
+Igual que product_model.py, pero para Shippers:
+
+    """
+    models/shipper_model.py
+    ─────────────────────────
+    MODELO de Shippers. Traduce operaciones de negocio a llamadas de
+    Stored Procedures (sp_InsertShipper, sp_UpdateShipper,
+    sp_DeleteShipper, sp_GetShipper, sp_GetAllShippers).
+    """
+
+    from models.database import DatabaseConnector
+
+
+    class ShipperModel:
+
+        def __init__(self, db: DatabaseConnector):
+            self.db = db
+
+        def get_all(self):
+            return self.db.call_procedure('sp_GetAllShippers')
+
+        def get_by_id(self, shipper_id: int):
+            return self.db.call_procedure('sp_GetShipper', (shipper_id,))
+
+        def insert(self, name, phone):
+            return self.db.call_procedure('sp_InsertShipper', (name, phone))
+
+        def update(self, shipper_id, name, phone):
+            return self.db.call_procedure('sp_UpdateShipper', (shipper_id, name, phone))
+
+        def delete(self, shipper_id: int):
+            return self.db.call_procedure('sp_DeleteShipper', (shipper_id,))
+
+
+PASO 3 — Crear la vista: views/shipper_view.py
+---------------------------------------------------
+Copia views/customer_view.py como punto de partida (es la más
+parecida: formulario simple + Treeview) y ajústala así. Fíjate que
+la vista NO importa mysql.connector en ningún lado, solo tkinter:
+
+    """
+    views/shipper_view.py
+    ────────────────────────
+    VISTA de Shippers. Solo widgets Tkinter — sin BD ni validaciones.
+    """
+
+    import tkinter as tk
+    from tkinter import ttk
+
+    FIELDS = [
+        ("ShipperID:",   "ShipperID"),
+        ("ShipperName:", "ShipperName"),
+        ("Phone:",       "Phone"),
+    ]
+
+    TREE_COLUMNS = (('ID', 50), ('Name', 150), ('Phone', 120))
+
+
+    class ShipperView(ttk.Frame):
+
+        def __init__(self, parent, controller):
+            super().__init__(parent)
+            self.controller = controller
+            self.entries = {}
+            self._crear_widgets()
+
+        def _crear_widgets(self):
+            main = tk.Frame(self)
+            main.pack(fill="both", expand=True, padx=10, pady=10)
+
+            left = tk.Frame(main)
+            left.pack(side="left", fill="y", padx=(0, 10))
+
+            tk.Label(left, text="GESTIÓN DE SHIPPERS",
+                     font=("Arial", 14, "bold"), fg="#9C27B0").pack(pady=15)
+
+            form = tk.Frame(left)
+            form.pack(padx=20)
+            for i, (label, key) in enumerate(FIELDS):
+                tk.Label(form, text=label, font=("Arial", 11)).grid(
+                    row=i, column=0, sticky="w", padx=(0, 8), pady=6)
+                entry = tk.Entry(form, width=22, font=("Arial", 11), relief="solid", bd=1)
+                entry.grid(row=i, column=1, sticky="w", pady=6)
+                self.entries[key] = entry
+
+            btns = tk.Frame(left)
+            btns.pack(pady=12)
+            for txt, color, cmd in [
+                ("Guardar",    "#4CAF50", lambda: self.controller.guardar()),
+                ("Actualizar", "#2196F3", lambda: self.controller.actualizar()),
+                ("Eliminar",   "#f44336", lambda: self.controller.eliminar()),
+                ("Buscar",     "#FF9800", lambda: self.controller.buscar()),
+                ("Limpiar",    "#9E9E9E", lambda: self.controller.limpiar()),
+            ]:
+                tk.Button(btns, text=txt, font=("Arial", 9, "bold"),
+                          bg=color, fg="white", width=9, command=cmd).pack(side="left", padx=2)
+
+            right = tk.Frame(main)
+            right.pack(side="right", fill="both", expand=True)
+            tk.Label(right, text="LISTA DE SHIPPERS",
+                     font=("Arial", 12, "bold")).pack(pady=8)
+
+            frame_tree = tk.Frame(right)
+            frame_tree.pack(fill="both", expand=True, padx=10)
+
+            cols = [c for c, _ in TREE_COLUMNS]
+            self.tree = ttk.Treeview(frame_tree, columns=cols, show='headings', height=18)
+            for col, width in TREE_COLUMNS:
+                self.tree.heading(col, text=col)
+                self.tree.column(col, width=width)
+
+            scrollbar = ttk.Scrollbar(frame_tree, orient="vertical", command=self.tree.yview)
+            self.tree.configure(yscrollcommand=scrollbar.set)
+            self.tree.pack(side="left", fill="both", expand=True)
+            scrollbar.pack(side="right", fill="y")
+            self.tree.bind('<<TreeviewSelect>>', lambda e: self.controller.on_select(e))
+
+        # ── API usada por el controlador ──────────────────────────────
+        def get_form_data(self) -> dict:
+            return {key: entry.get() for key, entry in self.entries.items()}
+
+        def set_form_data(self, values: dict):
+            for key, entry in self.entries.items():
+                entry.delete(0, tk.END)
+                val = values.get(key)
+                if val is not None:
+                    entry.insert(0, str(val))
+
+        def clear_form(self):
+            for entry in self.entries.values():
+                entry.delete(0, tk.END)
+
+        def set_tree_data(self, rows):
+            for item in self.tree.get_children():
+                self.tree.delete(item)
+            for row in rows:
+                self.tree.insert('', 'end', values=row)
+
+        def get_selected_tree_values(self):
+            selection = self.tree.selection()
+            if not selection:
+                return None
+            return self.tree.item(selection[0])['values']
+
+
+PASO 4 — Crear el controlador: controllers/shipper_controller.py
+------------------------------------------------------------------
+Copia controllers/customer_controller.py como base (misma forma:
+sin fechas, sin campos numéricos aparte del ID) y ajústala así:
+
+    """
+    controllers/shipper_controller.py
+    ─────────────────────────────────────
+    CONTROLADOR de Shippers: valida la entrada, llama al ShipperModel
+    y actualiza la ShipperView con el resultado.
+    """
+
+    from tkinter import messagebox
+
+    from models.shipper_model import ShipperModel
+    from views.shipper_view import ShipperView
+    from utils.validators import validate_required, validate_numeric
+
+    TREE_KEYS = ["ShipperID", "ShipperName", "Phone"]
+
+
+    class ShipperController:
+
+        def __init__(self, parent, db):
+            self.model = ShipperModel(db)
+            self.view = ShipperView(parent, self)
+            self.view.pack(fill="both", expand=True)
+            self.cargar_lista()
+
+        def guardar(self):
+            data = self.view.get_form_data()
+
+            if not validate_required(data["ShipperName"]):
+                messagebox.showerror("Validación", "ShipperName es obligatorio.")
+                return
+
+            success, result = self.model.insert(data["ShipperName"], data["Phone"] or None)
+
+            if success:
+                messagebox.showinfo("Éxito", "Shipper guardado correctamente.")
+                self.limpiar()
+                self.cargar_lista()
+            else:
+                messagebox.showerror("Error", f"Error al guardar: {result}")
+
+        def actualizar(self):
+            data = self.view.get_form_data()
+
+            ok, shipper_id = validate_numeric(data["ShipperID"])
+            if not ok or shipper_id is None:
+                messagebox.showerror("Error", "Ingresa un ShipperID válido.")
+                return
+
+            if not validate_required(data["ShipperName"]):
+                messagebox.showerror("Validación", "ShipperName es obligatorio.")
+                return
+
+            success, result = self.model.update(shipper_id, data["ShipperName"], data["Phone"] or None)
+
+            if success:
+                messagebox.showinfo("Éxito", "Shipper actualizado.")
+                self.cargar_lista()
+            else:
+                messagebox.showerror("Error", f"Error al actualizar: {result}")
+
+        def eliminar(self):
+            data = self.view.get_form_data()
+
+            ok, shipper_id = validate_numeric(data["ShipperID"])
+            if not ok or shipper_id is None:
+                messagebox.showerror("Error", "Ingresa un ShipperID válido.")
+                return
+
+            if not messagebox.askyesno("Confirmar", "¿Eliminar este shipper?"):
+                return
+
+            success, result = self.model.delete(shipper_id)
+            if success:
+                messagebox.showinfo("Éxito", "Shipper eliminado.")
+                self.limpiar()
+                self.cargar_lista()
+            else:
+                messagebox.showerror("Error", f"Error al eliminar: {result}")
+
+        def buscar(self):
+            data = self.view.get_form_data()
+
+            ok, shipper_id = validate_numeric(data["ShipperID"])
+            if not ok or shipper_id is None:
+                messagebox.showerror("Error", "Ingresa un ShipperID válido.")
+                return
+
+            success, result = self.model.get_by_id(shipper_id)
+            if success and result:
+                self.view.set_form_data(dict(zip(TREE_KEYS, result[0])))
+            else:
+                messagebox.showinfo("No encontrado", "Shipper no encontrado.")
+
+        def limpiar(self):
+            self.view.clear_form()
+
+        def cargar_lista(self):
+            success, result = self.model.get_all()
+            if success:
+                self.view.set_tree_data(result)
+            else:
+                messagebox.showerror("Error", f"No se pudo cargar la lista: {result}")
+
+        def on_select(self, event):
+            values = self.view.get_selected_tree_values()
+            if values:
+                self.view.set_form_data(dict(zip(TREE_KEYS, values)))
+
+
+PASO 5 — Registrar la pestaña nueva
+---------------------------------------
+5.1) En views/main_view.py, agrega una pestaña más al Notebook:
+
+    ANTES:
+        self.tab_products  = ttk.Frame(self.notebook)
+        self.tab_customers = ttk.Frame(self.notebook)
+        self.tab_employees = ttk.Frame(self.notebook)
+
+        self.notebook.add(self.tab_products,  text="  Products  ")
+        self.notebook.add(self.tab_customers, text="  Customers ")
+        self.notebook.add(self.tab_employees, text="  Employees ")
+
+    DESPUÉS:
+        self.tab_products  = ttk.Frame(self.notebook)
+        self.tab_customers = ttk.Frame(self.notebook)
+        self.tab_employees = ttk.Frame(self.notebook)
+        self.tab_shippers  = ttk.Frame(self.notebook)
+
+        self.notebook.add(self.tab_products,  text="  Products  ")
+        self.notebook.add(self.tab_customers, text="  Customers ")
+        self.notebook.add(self.tab_employees, text="  Employees ")
+        self.notebook.add(self.tab_shippers,  text="  Shippers  ")
+
+5.2) En controllers/main_controller.py, importa y crea el nuevo
+controlador:
+
+    ANTES:
+        from controllers.product_controller import ProductController
+        from controllers.customer_controller import CustomerController
+        from controllers.employee_controller import EmployeeController
+
+        ...
+
+        self.product_controller  = ProductController(self.view.tab_products, self.db)
+        self.customer_controller = CustomerController(self.view.tab_customers, self.db)
+        self.employee_controller = EmployeeController(self.view.tab_employees, self.db)
+
+    DESPUÉS:
+        from controllers.product_controller import ProductController
+        from controllers.customer_controller import CustomerController
+        from controllers.employee_controller import EmployeeController
+        from controllers.shipper_controller import ShipperController
+
+        ...
+
+        self.product_controller  = ProductController(self.view.tab_products, self.db)
+        self.customer_controller = CustomerController(self.view.tab_customers, self.db)
+        self.employee_controller = EmployeeController(self.view.tab_employees, self.db)
+        self.shipper_controller  = ShipperController(self.view.tab_shippers, self.db)
+
+
+PASO 6 — Probar
+-------------------
+Desde la carpeta 04_GUI_MVC ejecuta:
+
+    python main.py
+
+Debería abrir la ventana con 4 pestañas ahora (Products, Customers,
+Employees, Shippers). En la pestaña Shippers deberías poder:
+  - ver la lista de las 3 navieras que ya trae Northwindx
+  - insertar una nueva, buscarla por ID, actualizarla y eliminarla
+  - si intentas eliminar un Shipper que tiene Orders asociadas
+    (por ejemplo ShipperID 1, 2 o 3), debe salir el mensaje de
+    error controlado, no un crash.
+
+
+¿QUÉ APRENDISTE?
+--------------------
+Si completaste los 6 pasos, notarás que SIEMPRE fue el mismo patrón
+de 3 archivos (modelo / vista / controlador) más un registro en 2
+archivos "centrales" (main_view.py y main_controller.py). Ese es el
+punto de MVC: agregar una entidad nueva no obliga a tocar el código
+de Products, Customers o Employees — cada módulo vive aislado.
+
+Como reto extra, intenta agregar Categories o Suppliers de la misma
+forma (ambas tienen su sp_GetAll* ya escrito, igual que Shippers).

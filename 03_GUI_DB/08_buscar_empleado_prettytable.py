@@ -24,7 +24,7 @@ from tkinter import messagebox
 DB_CONFIG = {
     "host":     "localhost",
     "user":     "root",
-    "password": "",          # ← tu contraseña de MySQL
+    "password": "base1234",          # ← tu contraseña de MySQL
     "database": "northwind"
 }
 

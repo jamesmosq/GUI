@@ -35,7 +35,7 @@ DB_CONFIG = {
     "host":     "localhost",
     "database": "Northwind",
     "user":     "root",
-    "password": "",          # ← tu contraseña de MySQL
+    "password": "base1234",          # ← tu contraseña de MySQL
     "autocommit": False
 }
 
